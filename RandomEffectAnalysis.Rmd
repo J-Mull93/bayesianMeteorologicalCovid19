@@ -1,0 +1,116 @@
+---
+title: "RandomEffectAnalysis"
+author: "Jamie Mullienaux"
+date: "8/31/2022"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r Set-up analysis of random effects}
+# Posterior random effect samples
+phi_samples <- rbind(adaptive_models[,1]$samples$phi,
+                     adaptive_models[,2]$samples$phi,
+                     adaptive_models[,3]$samples$phi,
+                     adaptive_models[,4]$samples$phi)
+
+
+# Posterior random effect samples in second order neighbour model
+phi_samples_v2 <- rbind(second_neighbour_models[,1]$samples$phi,
+                        second_neighbour_models[,2]$samples$phi,
+                        second_neighbour_models[,3]$samples$phi,
+                        second_neighbour_models[,4]$samples$phi)
+
+
+# Function to extract random effects for a given local authority
+# Input: Local authority ID, random effect samples
+# Output: Random effects
+LA_phis <- function(id, random_effects){
+  cols <- (0:(N - lags - 6))*K + id
+  return(data.frame(random_effects[, cols]))
+}
+
+# Convert phi samples to long
+reshape_phi <- function(df){
+  df$Iter <- 1:10000
+  long_df <- reshape(df, direction ="long", idvar = "Iter",
+                     varying = list(names(df)[1:55]))
+
+  names(long_df) <- c("iter", "day", "sample")
+  long_df$day <- as.factor(long_df$day)
+  return(long_df)
+}
+```
+
+```{r Study random effects in Hackney and Islington}
+# Get random effect samples
+hackney_phi <- LA_phis(291, phi_samples)
+islington_phi <- LA_phis(298, phi_samples)
+
+hackney_phi_long <- reshape_phi(hackney_phi)
+islington_phi_long <- reshape_phi(islington_phi)
+
+# Plot violins of samples posteriors
+hackney_violin <- ggplot(data = hackney_phi_long[1:400000,], 
+                           mapping = aes(x = day[1:400000], 
+                                         y = sample[1:400000])) + 
+  geom_violin() + 
+  labs(x = "Hackney (days 1-40)", y = "Density") +
+  theme(axis.ticks.x = element_blank(), axis.text.x = element_blank()) +
+  ylim(-2.5,1.1) +
+  stat_summary(fun="mean", geom="point", size=1, color="red")
+
+png("HackneyRandomEffectOrig.png")
+grid.arrange(hackney_violin_1)
+dev.off()
+
+islington_violin <- ggplot(data = islington_phi_long[1:400000,], 
+                           mapping = aes(x = day[1:400000], 
+                                         y = sample[1:400000])) + 
+  geom_violin() + 
+  labs(x = "Islington (days 1-40)", y = "Density") +
+  theme(axis.ticks.x = element_blank(), axis.text.x = element_blank()) +
+  ylim(-2.5 ,1.1) +
+  stat_summary(fun="mean", geom="point", size=1, color="red")
+
+png("HackneyIislingtonRandomEffectsOrig.png")
+grid.arrange(grobs = list(hackney_violin, islington_violin), top = paste("Hackney and Islington random effect samples in M", "\u2080", sep = ""), nrow = 2)
+dev.off()
+
+```
+
+```{r Study random effects in Hackney and neighbouring LADs }
+hackney_phi_v2 <- LA_phis(291, phi_samples_v2)
+islington_phi_v2 <- LA_phis(298, phi_samples_v2)
+
+hackney_phi_long_v2 <- reshape_phi(hackney_phi_v2)
+islington_phi_long_v2 <- reshape_phi(islington_phi_v2)
+
+hackney_violin_v2 <- ggplot(data = hackney_phi_long_v2[1:400000,],
+                            mapping = aes(x = day[1:400000],
+                                          y = sample[1:400000])) + 
+  geom_violin() + 
+  labs(x = "Hackney (days 1-40)", y = "Density") +
+  theme(axis.ticks.x = element_blank(), axis.text.x = element_blank()) +
+  ylim(-2.5,1.1) +
+  stat_summary(fun="mean", geom="point", size=1, color="red")
+
+png("HackneyRandomEffect_v2.png")
+grid.arrange(hackney_violin_v2)
+dev.off()
+
+islington_violin_v2 <- ggplot(data = islington_phi_long_v2[1:400000,],
+                              mapping = aes(x = day[1:400000],
+                                            y = sample[1:400000])) + 
+  geom_violin() + 
+  labs(x = "Islington (days 1-40)", y = "Density") +
+  theme(axis.ticks.x = element_blank(), axis.text.x = element_blank()) +
+  ylim(-2.5 ,1.1) +
+  stat_summary(fun="mean", geom="point", size=1, color="red")
+
+png("HackneyIislingtonRandomEffects_v2.png")
+grid.arrange(grobs = list(hackney_violin_v2, islington_violin_v2), top = paste("Hackney and Islington random effect samples in M", "\u2081", sep = ""), nrow = 2)
+dev.off()
+```

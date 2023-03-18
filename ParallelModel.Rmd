@@ -1,0 +1,104 @@
+---
+title: "Paper_ParallelModels"
+author: "Jamie Mullienaux"
+date: "9/19/2022"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r parallel set up}
+# Set-up running models in parallel
+my_packages <- c("dplyr", "ggplot2", "gridExtra", "leaflet", "rgdal",
+                 "CARBayesST")
+
+library("parallel")
+cl <- makeCluster(4)
+clusterExport(cl, "my_packages")
+clusterEvalQ(cl, lapply(my_packages, require, character.only = TRUE))
+```
+
+```{r normalise highly skewed variables}
+# Replace 0's by the minimum value as positive values required for log / box-cox
+non_zero_precip <- sapply(model_data$totprecip, max, min(model_data$totprecip[model_data$totprecip != 0]))
+
+# Identify transformation parameter
+bc_param <- powerTransform(non_zero_precip) # 0.2740191  
+
+# Apply Box-Cox transformation with estimated parameter
+bc_precip <- (model_data$totprecip^0.2740191  - 1)/0.2740191  
+
+model_data_v2 <- transform(model_data, totprecip = bc_precip, 
+                           windV = log(windV))
+
+full_data <- model_data_v2
+```
+
+```{r transformed variable histograms}
+# Plot histograms of predictors used in model
+temp_hist <- ggplot(model_data_v2, mapping = aes(x = Tambient)) +
+  geom_histogram() +
+  labs(x = "Temperature (Celsius)")
+
+rh_hist <- ggplot(model_data_v2, mapping = aes(x = RH)) +
+  geom_histogram() +
+  labs(x = "Relative humidity (%)")
+
+wind_hist <- ggplot(model_data_v2, mapping = aes(x = windV)) +
+  geom_histogram() +
+  labs(x = "Wind velocity (log(m/s))")
+
+ssrd_hist <- ggplot(model_data_v2, mapping = aes(x = SSRD)) +
+  geom_histogram() +
+  labs(x = "Solar radiation")
+
+precipitation_hist <- ggplot(model_data_v2, mapping = aes(x = totprecip)) +
+  geom_histogram() +
+  labs(x = "Precipitation (transformed using Box-Cox)")
+
+
+png("Parallel_VariableHistograms.png")
+grid.arrange(temp_hist, rh_hist, wind_hist, ssrd_hist, precipitation_hist,
+             ncol = 2, nrow = 3)
+dev.off()
+```
+
+
+```{r parallel model set-up}
+# Set burn in (b), total sample (s) and thinning (t)
+b <- 200000
+s <- 700000
+t <- 200
+
+# Function to run MCMC model with new neighbourhood matrix
+run_adaptive <- function(x, data, w){
+  set.seed(x)
+  ST.CARadaptive(formula = cases~offset(log(expected_cases)) + Day +
+                   Tambient + RH + windV + SSRD + totprecip,
+                 data = data, family = "poisson", W = w, MALA = FALSE,
+                 burnin = b, n.sample = s, thin = t)
+}
+
+run_adaptive_full <- function(x){
+  run_adaptive(x, full_data, W)
+}
+
+# Export required vaiables to parallel clusters
+clusterExport(cl, "b")
+clusterExport(cl, "s")
+clusterExport(cl, "t")
+clusterExport(cl, "W")
+clusterExport(cl, "full_data")
+clusterExport(cl, "lad_data")
+clusterExport(cl, "run_adaptive")
+clusterExport(cl, "run_adaptive_full")
+```
+
+```{r run parallel models}
+# Run and save 4 chains in one variable
+adaptive_models <- parSapply(cl, 1:4, run_adaptive_full)
+saveRDS(adaptive_models, "adaptive_models.rds")
+```
+

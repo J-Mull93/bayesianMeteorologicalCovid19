@@ -1,0 +1,95 @@
+---
+title: "Paper_SensitivityModels"
+author: "Jamie Mullineaux"
+date: '2022-12-12'
+output: html_document
+---
+
+
+```{r parallel set up}
+# Set up running model in parallel
+my_packages <- c("dplyr", "CARBayesST")
+
+library("parallel")
+cl <- makeCluster(4)
+clusterExport(cl, "my_packages")
+clusterEvalQ(cl, lapply(my_packages, require, character.only = TRUE))
+```
+
+```{load variables}
+# Ensure to have loaded data and neighbourhood matrix used in main model 
+full_data <- readRDS("full_data.rds")
+W <- readRDS("W.rds")
+```
+
+```{r create new_W for second neighbour sensitivity}
+# Define a function to pair local authorities separated by just one other
+# Within a restricted area 
+# Input: Initial neighbourhood matrix and range of IDs for restricted area
+# Output: Updated neighbourhood matrix
+add_second_neighbours <- function(nb_W, orig_W, range){
+  for(i in range){
+    for (j in range){
+      if(orig_W[i,j] == 1){
+        for(k in range){
+          if(orig_W[j,k] == 1){
+            nb_W[i,k] = 1
+            nb_W[k,i] = 1
+          }
+        }
+      }
+    }
+    
+    nb_W[i,i] = 0
+  }
+  return(nb_W)
+}
+
+
+# Identify IDs defining England's largest metropolitan areas
+london <- 281:312
+tyneside <- c(264:267,280)
+merseyside <- 255:258
+greater_manchester <- 245:254
+west_midlands <- 268:274
+
+# Update the neighbourhood matrix to identify second order neighbours in large 
+# metropolitan areas
+new_W <- W
+new_W <- add_second_neighbours(new_W, W, london)
+new_W <- add_second_neighbours(new_W, W, tyneside)
+new_W <- add_second_neighbours(new_W, W, merseyside)
+new_W <- add_second_neighbours(new_W, W, greater_manchester)
+new_W <- add_second_neighbours(new_W, W, west_midlands)
+```
+
+
+```{r set up sensitivity models}
+# Set burn in (b), total sample (s) and thinning (t)
+b <- 200000
+s <- 700000
+t <- 200
+
+# Function to run MCMC model with new neighbourhood matrix
+run_second_neighbour_sensitivity <- function(x){
+  set.seed(x)
+  ST.CARadaptive(formula = cases~offset(log(expected_cases)) + Day +
+                   Tambient + RH + windV + SSRD + totprecip,
+                 data = full_data, family = "poisson", W = new_W, MALA = FALSE,
+                 burnin = b, n.sample = s, thin = t)
+}
+
+# Export required vaiables to parallel clusters
+clusterExport(cl, "b")
+clusterExport(cl, "s")
+clusterExport(cl, "t")
+clusterExport(cl, "new_W")
+clusterExport(cl, "full_data")
+clusterExport(cl, "run_second_neighbour_sensitivity")
+```
+
+```{r run second neighbour sensitivity analysis}
+# Run and save 4 chains in one variable
+second_neighbour_models <- parSapply(cl, 1:4, run_second_neighbour_sensitivity)
+saveRDS(second_neighbour_models, "second_neighbour_models.rds")
+```

@@ -1,0 +1,635 @@
+---
+title: "Paper_ParallelAnalysis"
+author: "Jamie Mullienaux"
+date: "9/23/2022"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r Model Diagnostics, echo=FALSE}
+diagnostics <- data.frame(matrix(ncol = 3, nrow = 2), 
+                          row.names = c("Adaptive Model",
+                                        "Neighbour Sensitivity"))
+
+colnames(diagnostics) <- c("DIC", "WAIC", "LMPL")
+
+diagnostics["Adaptive Model",1:3] <- (adaptive_models[,1]$modelfit[c(1,3,5)] +
+                                        adaptive_models[,2]$modelfit[c(1,3,5)] +
+                                        adaptive_models[,3]$modelfit[c(1,3,5)] +
+                                        adaptive_models[,4]$modelfit[c(1,3,5)]) / 4
+
+diagnostics["Neighbour Sensitivity",1:3] <- (second_neighbour_models[,1]$modelfit[c(1,3,5)] + second_neighbour_models[,2]$modelfit[c(1,3,5)] + second_neighbour_models[,3]$modelfit[c(1,3,5)] + second_neighbour_models[,4]$modelfit[c(1,3,5)]) / 4
+
+# Print diagnostics
+diagnostics
+```
+
+```{r Get model residuals, echo=FALSE}
+full_data["model.residuals"] <- (adaptive_models[,1]$residuals$response +
+                                       adaptive_models[,2]$residuals$response +
+                                       adaptive_models[,3]$residuals$response +
+                                       adaptive_models[,4]$residuals$response)/4
+```
+
+```{r Temporal diagnostics of model residuals, echo=FALSE}
+# Function to perform Ljung-Box test on a set of residuals from a given model
+temporal_p_values <- function(residuals){
+  p_vals <- rep(NA, K)
+  for(j in 1:K){
+    res <- full_data[full_data$index == j,][residuals]
+    p_vals[j] <- Box.test(res, lag = 7, type = c("Ljung-Box"), fitdf = 0)$p.value
+  }
+  return(cbind(uniq_la, p_vals))
+}
+
+# Calculate p-values for each LA
+uniq_la <- temporal_p_values("model.residuals")
+
+# Update the dataframe names to identify the respective models
+names(uniq_la) <- c(names(uniq_la)[1:2], "Adaptive Parallel Temporal p-value")
+
+# Identify number of LAs with statistically significant temporal auto-correlation
+# Tested at 5% significance level with a Bonferroni correction
+# 15/312 (4.8%) show auto-correlation at this significance level
+num_significant_LAs <- sum(uniq_la["Adaptive Parallel Temporal p-value"] < 0.05/K)
+
+# Boxplot of residuals by weekday
+# Shows consistent distribution, less variation Sat/Sun due to lower case volume
+weekday_resid <- ggplot(data = full_data, aes(x=Day, y=model.residuals)) +
+  geom_boxplot(outlier.shape = NA)  +  
+  ylim(-3,3) +
+  labs(y = "Model residuals")
+
+# Line-graph of mean residuals by each day in data set
+# Shows a random pattern
+mean_daily_resid <- aggregate(model.residuals ~ time, full_data, FUN=mean)
+daily_resid <- ggplot(mapping = aes(x = mean_daily_resid$time,
+                                    y=mean_daily_resid$model.residuals)) +
+  geom_line() +
+  labs(x = "Time", y = "Mean model residual")
+
+# Plot analysis of temporal residuals
+png("Parallel_TemporalResids.png")
+grid.arrange(grobs = list(daily_resid, weekday_resid), 
+             top = "Mean daily residuals across LADs with boxplot of all LAD resiudals by weekday", nrow = 2)
+dev.off()
+```
+
+
+```{r Spatial diagnostics of model residuals, echo=FALSE}
+## Set-up for Moran test
+time_periods <- data.frame(Day = 1:55)
+
+# Create a function to run Moran's I for each time period
+moran_temporal_test <- function(residuals, listw, num_sims, df){
+  p_vals <- rep(NA, N - lags - adjust)
+  # Loop through each time period
+  for(i in adjust:(N - lags - 1)){
+    res <- full_data[full_data$time == i, ][, residuals]
+    p_vals[i-4] <- moran.mc(res, listw = list_W, nsim = num_sims)$p.value
+  }
+  return(cbind(df, p_vals))
+}
+
+M = 10000
+
+time_periods <- moran_temporal_test("model.residuals", list_W, M, time_periods)
+
+# Update the dataframe names to identify the respective models
+names(time_periods) <- c("Day", "Adaptive Parallel Spatial p-value")
+
+# Identify number of days with statistically significant spatial auto-correlation
+# Tested at 5% significance level with a Bonferroni correction
+# No time period shows auto-correlation across LADs at this significance level
+num_significant_days <- sum(time_periods["Adaptive Parallel Spatial p-value"] < 0.05/(N - lags - adjust))
+
+# Plot model residuals (mean over all 4 chains)
+by_LA <- group_by(full_data, code)
+avg_resid <- summarise(by_LA, res = mean(model.residuals))
+avg_resid_LA <- merge(x = LA, y = avg_resid, by.x = "LAD20CD", by.y = "code", 
+                   all.x = FALSE)
+
+# Change data type so ggplot can be used
+gg_LA_avg_resid = st_as_sf(avg_resid_LA)
+
+# Save plot
+png("Paper_MeanResidbyLA.png")
+la_resid_plot = ggplot() + geom_sf(data = gg_LA_avg_resid, aes(fill = res)) + theme_void() + scale_fill_viridis(option = "C") + labs(fill='Residual') 
+grid.arrange(la_resid_plot, top = "Mean LAD residuals across the study period")
+dev.off()
+```
+
+## Weather Analysis
+```{r Get trace plots for regression parameters, echo=FALSE}
+# Convert regression posterior samples to MCMC object 
+parallel_beta_mcmc <- mcmc.list(adaptive_models[,1]$samples$beta,
+                                adaptive_models[,2]$samples$beta,
+                                adaptive_models[,3]$samples$beta,
+                                adaptive_models[,4]$samples$beta)
+
+parallel_beta_days <- mcmc.list(adaptive_models[,1]$samples$beta[,2:7],
+                                adaptive_models[,2]$samples$beta[,2:7],
+                                adaptive_models[,3]$samples$beta[,2:7],
+                                adaptive_models[,4]$samples$beta[,2:7])
+
+parallel_beta_other <- mcmc.list(adaptive_models[,1]$samples$beta[,-c(2:7)],
+                                adaptive_models[,2]$samples$beta[,-c(2:7)],
+                                adaptive_models[,3]$samples$beta[,-c(2:7)],
+                                adaptive_models[,4]$samples$beta[,-c(2:7)])
+
+# Assess convergence with gelman-rubin diagnostic and trace plots
+# Mostly looks good. Some chains may not have converegd for some weekdays
+png("Parallel_DayTracePlots.png")
+plot(parallel_beta_days, density = FALSE)
+dev.off()
+
+png("Parallel_WeatherTracePlots.png")
+plot(parallel_beta_other, density = FALSE)
+dev.off()
+
+gelman.diag(parallel_beta_mcmc)
+
+# Store all samples in a dataframe
+parallel_beta_samples <- data.frame(matrix(nrow = 10000, ncol = 12))
+names(parallel_beta_samples) <- c("Intercept", "Sun", "Fri", "Sat", 
+                                  "Wed", "Mon", "Tue", "Temperature",
+                                  "Relative Humidity", "Wind Velocity",
+                                  "Solar Radiation", "Precipitation")
+parallel_beta_samples[,1:12] <- rbind(parallel_beta_mcmc[[1]],
+                                      parallel_beta_mcmc[[2]],
+                                      parallel_beta_mcmc[[3]],
+                                      parallel_beta_mcmc[[4]])
+``` 
+
+```{r Analyse posteriors of regression parameters}
+# Calculate 95% HPDs for regression parameters (shown on plots)
+beta_hdi <- HPDinterval(as.mcmc(rbind(parallel_beta_mcmc[[1]],
+                                      parallel_beta_mcmc[[2]],
+                                      parallel_beta_mcmc[[3]],
+                                      parallel_beta_mcmc[[4]])), prob = 0.95)
+
+# Density graphs for weekday posterior distributions
+sun_posterior <- ggplot(parallel_beta_samples, aes(x = Sun)) + 
+  geom_density() + 
+  geom_segment(aes(x=beta_hdi[2],xend=beta_hdi[14],y=1.1,yend=1.1, colour = "blue", linetype = "dashed")) + 
+  geom_segment(aes(x=beta_hdi[2],xend=beta_hdi[2],y=0,yend=1.1, colour = "red", linetype = "dashed"))  + 
+  geom_segment(aes(x=beta_hdi[14],xend=beta_hdi[14],y=0,yend=1.1, colour = "red", linetype = "dashed")) +
+  labs(y = "Density", x = "Parameter value", title = "Sunday") + 
+  theme(legend.position = "none") +
+  xlim(-0.45,0.45)
+
+mon_posterior <- ggplot(parallel_beta_samples, aes(x = Mon)) + 
+  geom_density() + 
+  geom_segment(aes(x=beta_hdi[6],xend=beta_hdi[18],y=1.1,yend=1.1, colour = "blue", linetype = "dashed")) + 
+  geom_segment(aes(x=beta_hdi[6],xend=beta_hdi[6],y=0,yend=1.1, colour = "red", linetype = "dashed"))  + 
+  geom_segment(aes(x=beta_hdi[18],xend=beta_hdi[18],y=0,yend=1.1, colour = "red", linetype = "dashed")) +
+  labs(y = "Density", x = "Parameter value", title = "Monday") + 
+  theme(legend.position = "none") +
+  xlim(-0.45,0.45)
+
+wed_posterior <- ggplot(parallel_beta_samples, aes(x = Wed)) + 
+  geom_density() + 
+  geom_segment(aes(x=beta_hdi[5],xend=beta_hdi[17],y=1.5,yend=1.5, colour = "blue", linetype = "dashed")) + 
+  geom_segment(aes(x=beta_hdi[5],xend=beta_hdi[5],y=0,yend=1.5, colour = "red", linetype = "dashed"))  + 
+  geom_segment(aes(x=beta_hdi[17],xend=beta_hdi[17],y=0,yend=1.5, colour = "red", linetype = "dashed")) +
+  labs(y = "Density", x = "Parameter value", title = "Wednesday") + 
+  theme(legend.position = "none") +
+  xlim(-0.45,0.45)
+
+tue_posterior <- ggplot(parallel_beta_samples, aes(x = Tue)) + 
+  geom_density() + 
+  geom_segment(aes(x=beta_hdi[7],xend=beta_hdi[19],y=1.1,yend=1.1, colour = "blue", linetype = "dashed")) + 
+  geom_segment(aes(x=beta_hdi[7],xend=beta_hdi[7],y=0,yend=1.1, colour = "red", linetype = "dashed"))  + 
+  geom_segment(aes(x=beta_hdi[19],xend=beta_hdi[19],y=0,yend=1.1, colour = "red", linetype = "dashed")) +
+  labs(y = "Density", x = "Parameter value", title = "Tuesday") + 
+  theme(legend.position = "none") +
+  xlim(-0.45,0.45)
+
+fri_posterior <- ggplot(parallel_beta_samples, aes(x = Fri)) + 
+  geom_density() + 
+  geom_segment(aes(x=beta_hdi[3],xend=beta_hdi[15],y=1.2,yend=1.2, colour = "blue", linetype = "dashed")) + 
+  geom_segment(aes(x=beta_hdi[3],xend=beta_hdi[3],y=0,yend=1.2, colour = "red", linetype = "dashed"))  + 
+  geom_segment(aes(x=beta_hdi[15],xend=beta_hdi[15],y=0,yend=1.2, colour = "red", linetype = "dashed")) +
+  labs(y = "Density", x = "Parameter value", title = "Friday") + 
+  theme(legend.position = "none") +
+  xlim(-0.45,0.45)
+
+sat_posterior <- ggplot(parallel_beta_samples, aes(x = Sat)) + 
+  geom_density() + 
+  geom_segment(aes(x=beta_hdi[4],xend=beta_hdi[16],y=1.2,yend=1.2, colour = "blue", linetype = "dashed")) + 
+  geom_segment(aes(x=beta_hdi[4],xend=beta_hdi[4],y=0,yend=1.2, colour = "red", linetype = "dashed"))  + 
+  geom_segment(aes(x=beta_hdi[16],xend=beta_hdi[16],y=0,yend=1.2, colour = "red", linetype = "dashed")) +
+  labs(y = "Density", x = "Parameter value", title = "Saturday") + 
+  theme(legend.position = "none") +
+  xlim(-0.45,0.45)
+
+# Plot weekday posterior distributions
+png(file = "Parallel_DayPosteriors_paper.png")
+grid.arrange(grobs = list(mon_posterior, tue_posterior, weds_posterior, fri_posterior, sat_posterior, sun_posterior), top = "Posterior distributions of weekday parameters with 95% credible intervals", ncol = 2, nrow = 3)
+dev.off()
+
+# Density graphs for intercept and weather posterior distributions
+
+intercept_posterior <- ggplot(parallel_beta_samples, aes(x = Intercept)) + 
+  geom_density() + 
+  geom_segment(aes(x=beta_hdi[1],xend=beta_hdi[13],y=0.35,yend=0.35, colour = "blue", linetype = "dashed")) + 
+  geom_segment(aes(x=beta_hdi[1],xend=beta_hdi[1],y=0,yend=0.35, colour = "red", linetype = "dashed"))  + 
+  geom_segment(aes(x=beta_hdi[13],xend=beta_hdi[13],y=0,yend=0.35, colour = "red", linetype = "dashed")) +
+  labs(y = "Density", x = "Parameter value", title = "Intercept") + 
+  theme(legend.position = "none") +
+  xlim(-0.7, 0.7)
+
+rh_posterior <- ggplot(parallel_beta_samples, aes(x = parallel_beta_samples[,9])) + 
+  geom_density() + 
+  geom_segment(aes(x=beta_hdi[9],xend=beta_hdi[21],y=30,yend=30, colour = "blue", linetype = "dashed")) + 
+  geom_segment(aes(x=beta_hdi[9],xend=beta_hdi[9],y=0,yend=30, colour = "red", linetype = "dashed"))  + 
+  geom_segment(aes(x=beta_hdi[21],xend=beta_hdi[21],y=0,yend=30, colour = "red", linetype = "dashed")) +
+  labs(y = "Density", x = "Parameter value", title = "Relative humidity") + 
+  theme(legend.position = "none") +
+  xlim(-0.01,0.01)
+
+wind_posterior <- ggplot(parallel_beta_samples, aes(x = parallel_beta_samples[,10])) + 
+  geom_density() + 
+  geom_segment(aes(x=beta_hdi[10],xend=beta_hdi[22],y=2.2,yend=2.2, colour = "blue", linetype = "dashed")) + 
+  geom_segment(aes(x=beta_hdi[10],xend=beta_hdi[10],y=0,yend=2.2, colour = "red", linetype = "dashed"))  + 
+  geom_segment(aes(x=beta_hdi[22],xend=beta_hdi[22],y=0,yend=2.2, colour = "red", linetype = "dashed")) +
+  labs(y = "Density", x = "Parameter value", title = "Wind velocity") + 
+  theme(legend.position = "none") +
+  xlim(-0.1,0.1)
+
+temp_posterior <- ggplot(parallel_beta_samples, aes(x = Temperature)) + 
+  geom_density() + 
+  geom_segment(aes(x=beta_hdi[8],xend=beta_hdi[20],y=7,yend=7, colour = "blue", linetype = "dashed")) + 
+  geom_segment(aes(x=beta_hdi[8],xend=beta_hdi[8],y=0,yend=7, colour = "red", linetype = "dashed"))  + 
+  geom_segment(aes(x=beta_hdi[20],xend=beta_hdi[20],y=0,yend=7, colour = "red", linetype = "dashed")) +
+  labs(y = "Density", x = "Parameter value", title = "Temperature") + 
+  theme(legend.position = "none") +
+  xlim(-0.03,0.03)
+
+ssrd_posterior <- ggplot(parallel_beta_samples, aes(x = parallel_beta_samples[,11])) + 
+  geom_density() + 
+  geom_segment(aes(x=beta_hdi[11],xend=beta_hdi[23],y=1.5,yend=1.5, colour = "blue", linetype = "dashed")) + 
+  geom_segment(aes(x=beta_hdi[11],xend=beta_hdi[11],y=0,yend=1.5, colour = "red", linetype = "dashed"))  + 
+  geom_segment(aes(x=beta_hdi[23],xend=beta_hdi[23],y=0,yend=1.5, colour = "red", linetype = "dashed")) +
+  labs(y = "Density", x = "Parameter value", title = "Solar radiation") + 
+  theme(legend.position = "none") +
+  xlim(-0.1,0.1)
+
+precipitation_posterior <- ggplot(parallel_beta_samples, aes(x = Precipitation)) + 
+  geom_density() + 
+  geom_segment(aes(x=beta_hdi[12],xend=beta_hdi[24],y=3,yend=3, colour = "blue", linetype = "dashed")) + 
+  geom_segment(aes(x=beta_hdi[12],xend=beta_hdi[12],y=0,yend=3, colour = "red", linetype = "dashed"))  + 
+  geom_segment(aes(x=beta_hdi[24],xend=beta_hdi[24],y=0,yend=3, colour = "red", linetype = "dashed")) +
+  labs(y = "Density", x = "Parameter value", title = "Precipitation") + 
+  theme(legend.position = "none") +
+  xlim(-0.05,0.05)
+
+# Plot intercept and weather posterior distributions
+png(file = "Parallel_WeatherPosteriors_paper.png")
+grid.arrange(grobs = list(intercept_posterior, temp_posterior, rh_posterior, wind_posterior, ssrd_posterior, precipitation_posterior), 
+             top = "Posterior distributions for weather & intercept parameters with 95% credible intervals",
+             ncol = 2, nrow = 3)
+dev.off()
+```
+
+```{r Get posteriors of hyperparameters}
+# Convert posterior samples of 4 main hyperparameters to MCMC objects
+# Obtain corresponding Gelman-Rubin diagnostics - they show convergence
+parallel_rho <- mcmc.list(adaptive_models[,1]$samples$rho,
+                          adaptive_models[,2]$samples$rho,
+                          adaptive_models[,3]$samples$rho,
+                          adaptive_models[,4]$samples$rho)
+
+parallel_tau2 <- mcmc.list(adaptive_models[,1]$samples$tau2,
+                          adaptive_models[,2]$samples$tau2,
+                          adaptive_models[,3]$samples$tau2,
+                          adaptive_models[,4]$samples$tau2)
+
+# Assess convergence with Gelman diagnostic and trace plots - looks good
+gelman.diag(parallel_rho)
+gelman.diag(parallel_tau2)
+
+png("Parallel_RhoTracePlots.png")
+plot(parallel_rho, density = FALSE)
+dev.off()
+
+png("Parallel_TauTracePlots.png")
+plot(parallel_tau2, density = FALSE)
+dev.off()
+
+# Get 95% HDI (not shown on plots)
+hyperparam_hdi <- HPDinterval(as.mcmc(rbind(parallel_rho[[1]],
+                                      parallel_rho[[2]],
+                                      parallel_rho[[3]],
+                                      parallel_rho[[4]])), prob = 0.95)
+
+# Save graphical posterior densities of main hyperparameters to file
+png(file="ParallelHyperparams_paper.png")
+parallel_rhoS <- ggplot(mapping = aes(x = c(parallel_rho[[1]][,1],
+                                            parallel_rho[[2]][,1],
+                                            parallel_rho[[3]][,1],
+                                            parallel_rho[[4]][,1]))) +
+  geom_density() +
+  labs(x = expression(rho["S"]), y = "Density")
+
+parallel_rhoT <- ggplot(mapping = aes(x = c(parallel_rho[[1]][,2],
+                                            parallel_rho[[2]][,2],
+                                            parallel_rho[[3]][,2],
+                                            parallel_rho[[4]][,2]))) +
+  geom_density() +
+  labs(x = expression(rho["T"]), y = "Density")
+
+parallel_tau <- ggplot(mapping = aes(x = c(parallel_tau2[[1]][,1],
+                                           parallel_tau2[[2]][,1],
+                                           parallel_tau2[[3]][,1],
+                                           parallel_tau2[[4]][,1]))) +
+  geom_density() +
+  labs(x = expression(tau^2), y = "Density")
+
+parallel_tauw <- ggplot(mapping = aes(x = c(parallel_tau2[[1]][,2],
+                                            parallel_tau2[[2]][,2],
+                                            parallel_tau2[[3]][,2],
+                                            parallel_tau2[[4]][,2]))) +
+  geom_density() +
+  labs(x = expression(tau[omega]^2), y = "Density")
+
+grid.arrange(grobs = list(parallel_rhoS, parallel_rhoT, parallel_tau,
+                          parallel_tauw),
+             top = "Posterior distributions of hyperparameters",
+             nrow=2, ncol=2)
+dev.off()
+```
+
+```{r Analysis of neighbourhood matrix posteriors, echo=FALSE}
+# Set up dataframe to contain neighbourhood matrix estimates posterior samples
+parallel_w <- data.frame(matrix(nrow = 10000, ncol = 808))
+parallel_new_w <- data.frame(matrix(nrow = 10000, ncol = 956))
+w_names <- "w 1"
+for(i in 2:808){w_names <- c(w_names, paste("w",i))}
+names(parallel_w) <- w_names
+names(parallel_new_w) <- w_names
+
+# Store posterior samples
+parallel_w[,1:808] <- rbind(adaptive_models[,1]$samples$w,
+                            adaptive_models[,2]$samples$w,
+                            adaptive_models[,3]$samples$w,
+                            adaptive_models[,4]$samples$w)
+parallel_w$Iter <- 1:10000
+
+parallel_new_w[,1:956] <- rbind(second_neighbour_models[,1]$samples$w,
+                                second_neighbour_models[,2]$samples$w,
+                                second_neighbour_models[,3]$samples$w,
+                                second_neighbour_models[,4]$samples$w)
+parallel_new_w$Iter <- 1:10000
+
+# Calculate summary statistics of posterior samples for all 808 elements
+mean_ws <- colMeans(parallel_w[,2:809])
+median_ws <- sapply(parallel_w[,2:809], median)
+lq_ws <- sapply(parallel_w[,2:809], quantile, probs = 0.25)
+uq_ws <- sapply(parallel_w[,2:809], quantile, probs = 0.75)
+
+# Plot summary statistics of posterior samples for all 808 elements
+png(file="Parallel_NeighbourhoodMatrixPosteriors_paper.png")
+
+w_mean_hist <- ggplot(mapping = aes(x = mean_ws)) +
+  geom_histogram(position = "identity", bins = 25) +
+  labs(x = "Posterior mean", y = "Neighbouring local authority pairs")
+
+w_median_hist <- ggplot(mapping = aes(x = median_ws)) +
+  geom_histogram(position = "identity", bins = 25) +
+  labs(x = "Posterior median", y = "Neighbouring local authority pairs")
+
+w_lq_hist <- ggplot(mapping = aes(x = lq_ws)) +
+  geom_histogram(position = "identity", bins = 25) +
+  labs(x = "Posterior lower quartile", y = "Neighbouring local authority pairs")
+
+w_uq_hist <- ggplot(mapping = aes(x = uq_ws)) +
+  geom_histogram(position = "identity", bins = 25) +
+  labs(x = "Posterior upper quartile", y = "Neighbouring local authority pairs")
+
+grid.arrange(w_mean_hist, w_median_hist, w_lq_hist, w_uq_hist, ncol = 2, nrow = 2)
+
+dev.off()
+
+# Caclulate Gelman-Rubin diagnostic for neighbourhood matrix elements
+parallel_ws <- mcmc.list(adaptive_models[,1]$samples$w,
+                         adaptive_models[,2]$samples$w,
+                         adaptive_models[,3]$samples$w,
+                         adaptive_models[,4]$samples$w)
+
+w_gelmans <- gelman.diag(adaptive_ws)[[1]][1:808]
+
+# Histogram of neighbourhood matrix element Gelman-Rubin statistics
+# Shows convergence
+w_gelman_hist <- ggplot(aes(x = w_gelmans)) + geom_histogram() +
+  theme(legend.title = "Convergen diagnostics for neighbourhood matrix elements")
+```
+
+```{r identify neighbouring LADs of Hackney}
+# Function to identify neighbours of a local authority
+# Input: Neighbourhood matrix and local authority ID
+# Output: IDs of neighbours
+identify_neighbours <- function(nb_W, id){
+  neighbours <- c()
+  for(j in 1:K){
+    if(nb_W[id, j] == 1){
+      neighbours <- c(neighbours,j)
+    }
+  }
+  return(neighbours)
+}
+
+# Function to identify neighbourhood matrix elements of neighbouring authorities
+# Input: Neighbourhood matrix, local authrity ID, list of neighbour authority IDs
+# Output: IDs of corresponding neighbourhood matrix elements
+identify_w_elements <- function(nb_W, id, nb_id){
+  neighbour_w <- c()
+  for(j in nb_id){
+    if(j > id){
+      p1 <- sum(upper.triangle(nb_W[1:(j - 1), 1:(j - 1)]))
+      p2 <- sum(W[1:id, j])
+    } else {
+      p1 <- sum(upper.triangle(nb_W[1:(id - 1), 1:(id - 1)]))
+      p2 <- sum(nb_W[1:j, id])
+    }
+    neighbour_w <- c(neighbour_w, p1 + p2)
+  }
+  return(neighbour_w)
+}
+
+## Calculate neighbours and corresponding neighbourhood matrix element IDs
+
+# Hackney & City of London
+hackney_neighbours <- identify_neighbours(W, 291)
+# 286, 293, 298, 304, 307, 309, 310, 312
+identify_w_elements(W, 291, hackney_neighbours)
+# 727, 733, 754, 769, 780, 788, 793, 805
+
+# Hackney & City of London - extended model
+hackney__extended_neighbours <- identify_neighbours(new_W, 291)
+# 281, 282, 284, 285, 286, 289, 293, 298, 299, 301, 302, 304, 305, 307, 309, 310, 311, 312
+identify_w_elements(new_W, 291, hackney__extended_neighbours)
+# 766, 767, 768, 769, 770, 771, 779, 810, 815, 831, 841, 853, 860, 878, 897, 910, 920, 938
+```
+
+```{r main model correlation graphs}
+## Hackney graphs
+png("hackney_neighbours.png")
+
+camden <- ggplot(mapping = aes(x = parallel_w[,727])) + 
+  geom_density() +
+  labs(x = "Correlation", y = "Density", title = "Camden") + 
+   theme(text=element_text(size=8))
+
+haringey <- ggplot(mapping = aes(x = parallel_w[,733])) + 
+  geom_density() +
+  labs(x = "Correlation", y = "Density", title = "Haringey") + 
+   theme(text=element_text(size=8))
+
+islington <- ggplot(mapping = aes(x = parallel_w[,754])) + 
+  geom_density() +
+  labs(x = "Correlation", y = "Density", title = "Islington") + 
+   theme(text=element_text(size=8))
+
+newham <- ggplot(mapping = aes(x = parallel_w[,769])) + 
+  geom_density() +
+  labs(x = "Correlation", y = "Density", title = "Newham") + 
+   theme(text=element_text(size=8))
+
+southwark <- ggplot(mapping = aes(x = parallel_w[,780])) + 
+  geom_density() +
+  labs(x = "Correlation", y = "Density", title = "Southwark") + 
+   theme(text=element_text(size=8))
+
+tower_hamlets <- ggplot(mapping = aes(x = parallel_w[,788])) + 
+  geom_density() +
+  labs(x = "Correlation", y = "Density", title = "Tower Hamlets") + 
+   theme(text=element_text(size=8))
+
+waltham_forest <- ggplot(mapping = aes(x = parallel_w[,793])) + 
+  geom_density() +
+  labs(x = "Correlation", y = "Density", title = "Waltham Forest") + 
+   theme(text=element_text(size=8))
+
+westminster <- ggplot(mapping = aes(x = parallel_w[,805])) + 
+  geom_density() +
+  labs(x = "Correlation", y = "Density", title = "Westminster") + 
+   theme(text=element_text(size=8))
+
+grid.arrange(grobs = list(camden, haringey, islington, newham, southwark, tower_hamlets, waltham_forest, westminster),  top = paste("Posterior correlations between Hackney and second neighbours in M", "\u2080", sep = ""), nrow=3, ncol=3)
+
+dev.off()
+```
+
+```{r second order neighbour correlation graphs}
+## Hackney graphs
+png("hackney_extended_orig_neighbours.png")
+
+camden <- ggplot(mapping = aes(x = parallel_new_w[,770])) + 
+  geom_density() +
+  labs(x = "Correlation", y = "Density", title = "Camden") + 
+   theme(text=element_text(size=8))
+
+haringey <- ggplot(mapping = aes(x = parallel_new_w[,779])) + 
+  geom_density() +
+  labs(x = "Correlation", y = "Density", title = "Haringey") + 
+   theme(text=element_text(size=8))
+
+islington <- ggplot(mapping = aes(x = parallel_new_w[,810])) + 
+  geom_density() +
+  labs(x = "Correlation", y = "Density", title = "Islington") + 
+   theme(text=element_text(size=8))
+
+newham <- ggplot(mapping = aes(x = parallel_new_w[,853])) + 
+  geom_density() +
+  labs(x = "Correlation", y = "Density", title = "Newham") + 
+   theme(text=element_text(size=8))
+
+southwark <- ggplot(mapping = aes(x = parallel_new_w[,878])) + 
+  geom_density() +
+  labs(x = "Correlation", y = "Density", title = "Southwark") + 
+   theme(text=element_text(size=8))
+
+tower_hamlets <- ggplot(mapping = aes(x = parallel_new_w[,897])) + 
+  geom_density() +
+  labs(x = "Correlation", y = "Density", title = "Tower Hamlets") + 
+   theme(text=element_text(size=8))
+
+waltham_forest <- ggplot(mapping = aes(x = parallel_new_w[,910])) + 
+  geom_density() +
+  labs(x = "Correlation", y = "Density", title = "Waltham Forest") + 
+   theme(text=element_text(size=8))
+
+westminster <- ggplot(mapping = aes(x = parallel_new_w[,938])) + 
+  geom_density() +
+  labs(x = "Correlation", y = "Density", title = "Westminster") + 
+   theme(text=element_text(size=8))
+
+grid.arrange(grobs = list(camden, haringey, islington, newham, southwark, tower_hamlets, waltham_forest, westminster), top = paste("Posterior correlations between Hackney and immediate neighbours in M", "\u2081", sep = ""), nrow=3, ncol=3)
+
+dev.off()
+
+png("hackney_extended_second_neighbours.png")
+
+barking_and_dagenham <- ggplot(mapping = aes(x = parallel_new_w[,766])) + 
+  geom_density() +
+  labs(x = "Correlation", y = "Density", title = "Barking & Dagenham") + 
+   theme(text=element_text(size=8))
+
+barnet <- ggplot(mapping = aes(x = parallel_new_w[,767])) + 
+  geom_density() +
+  labs(x = "Correlation", y = "Density", title = "Barnet") + 
+   theme(text=element_text(size=8))
+
+brent <- ggplot(mapping = aes(x = parallel_new_w[,768])) + 
+  geom_density() +
+  labs(x = "Correlation", y = "Density", title = "Brent") + 
+   theme(text=element_text(size=8))
+
+bromley <- ggplot(mapping = aes(x = parallel_new_w[,769])) + 
+  geom_density() +
+  labs(x = "Correlation", y = "Density", title = "Bromley") + 
+   theme(text=element_text(size=8))
+
+enfield <- ggplot(mapping = aes(x = parallel_new_w[,771])) + 
+  geom_density() +
+  labs(x = "Correlation", y = "Density", title = "Enfield") + 
+   theme(text=element_text(size=8))
+
+kensignton_and_chelsea <- ggplot(mapping = aes(x = parallel_new_w[,815])) + 
+  geom_density() +
+  labs(x = "Correlation", y = "Density", title = "Kensington & Chelsea") + 
+   theme(text=element_text(size=8))
+
+lambeth <- ggplot(mapping = aes(x = parallel_new_w[,831])) + 
+  geom_density() +
+  labs(x = "Correlation", y = "Density", title = "Lambeth") + 
+   theme(text=element_text(size=8))
+
+lewisham <- ggplot(mapping = aes(x = parallel_new_w[,841])) + 
+  geom_density() +
+  labs(x = "Correlation", y = "Density", title = "Lewisham") + 
+   theme(text=element_text(size=8))
+
+redbridge <- ggplot(mapping = aes(x = parallel_new_w[,860])) + 
+  geom_density() +
+  labs(x = "Correlation", y = "Density", title = "Redbridge") + 
+   theme(text=element_text(size=8))
+
+wandsworth <- ggplot(mapping = aes(x = parallel_new_w[,920])) + 
+  geom_density() +
+  labs(x = "Correlation", y = "Density", title = "Wandsworth") + 
+   theme(text=element_text(size=8))
+
+
+grid.arrange(grobs = list(barking_and_dagenham, barnet, brent, bromley, enfield,
+             kensignton_and_chelsea, lambeth, lewisham, redbridge, wandsworth), 
+             top =  paste("Posterior correlations between Hackney and second neighbours in M", "\u2081", sep = ""), nrow=4, ncol=3)
+
+dev.off()
+```
+

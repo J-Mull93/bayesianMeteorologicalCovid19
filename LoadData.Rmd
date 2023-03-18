@@ -1,0 +1,445 @@
+---
+title: "DataLoad_paper"
+author: "Jamie Mullienaux"
+date: "9/13/2022"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r load data}
+# Useful libraries
+library(dplyr)
+library(ggplot2)
+library(gridExtra)
+library(CARBayesST)
+library(leaflet)
+library(rgdal)
+library(coda)
+library(spdep)
+library(psych)
+library(car)
+library(viridis)
+
+
+# Load daily cases data
+covid <- readRDS("clean_data_13Sept.rds")
+
+# Load a separate file containing population & merge with case data
+pop_data <- read.csv("covid_cases.csv")
+populations <- unique(pop_data[c("code", "population")])
+covid <- merge(covid, populations)
+
+# Read in England local authority map shapefile
+LA <- readOGR("LAD_(Dec_2020)_UK_BFC.shp")
+```
+
+
+```{r clean data}
+# check no NA data na data format
+str(covid)
+sum(is.na(covid)) # no NA values in data (sum=0)
+
+# Identify data set size
+uniq_la <- covid %>% distinct(code, lads)
+K <- nrow(uniq_la) # LADs
+N <- length(unique(covid$time)) # Days
+
+# Add an index corresponding to LAD code
+la_codes <- data.frame("index" = 1:K, "code" = unique(covid$code))
+covid <- merge(covid, la_codes)
+covid <- covid[order(covid$date, covid$code), ]
+
+# Scale temperature to familiar Celsius scale
+# Scale other variable sizes
+covid$Tambient <- covid$Tambient - 273.15
+covid$surfpressure <- covid$surfpressure / 1000000
+covid$MSL <- covid$MSL / 1000000
+covid$SSRD <- covid$SSRD / 1000000
+covid$SSR <- covid$SSR / 1000000
+covid$totprecip <- covid$totprecip * 1000
+
+# Add weekdays to data
+# Note: North Devon (E07000043) is missing for the first 5 days
+days <- c("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
+covid$Day <- c(rep(days[c(4:7,1)], each = K-1),
+               rep(rep(days[c(2:7, 1)], each = K),8), 
+               rep(days[2:6], each = K))
+attach(covid)
+```
+
+```{r calculate relative risk}
+
+# Calculate weekday relative risk (RR)
+weekday_rr <- aggregate(covid$cases, by = list(covid$Day)
+                         , FUN=sum) %>% mutate(x = x * 7/ sum(cases))
+names(weekday_rr) <- c("Day", "RR")
+weekday_rr <- weekday_rr[match(days, weekday_rr$Day),]
+
+# Calculate daily expected cases based on cases, population and weekday RR
+daily_rr <- c(rep(weekday_rr$RR[c(4:7,1)], each = K-1), 
+              rep(rep(weekday_rr$RR[c(2:7, 1)], each = K),8), 
+              rep(weekday_rr$RR[2:6], each = K))
+
+covid <- covid %>% mutate(expected_cases = population * (sum(cases) / sum(population)))
+covid <- covid %>% mutate(daily_RR = daily_rr)
+
+# Calculate RR for each record and attach dataframe
+covid$RR <- covid$cases / covid$expected_cases
+attach(covid)
+```
+
+
+
+
+
+
+```{r define adjacent pairs, echo=FALSE}
+# Define adjacent local authorities for each local authority
+# Unitary authorities
+adjacent_pairs <- data.frame(matrix(ncol = 2, nrow = 0))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(1,2), c(4,45)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(2,3), c(3,4,177)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(3,3), c(2,177,181)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(4,5), c(1,2,5,45,177)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(5,4), c(4,45,177,179)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(6,5), c(7,47,255,256,257)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(7,6), c(6,46,47,250,253,254)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(8,7), c(137, 139, 143, 144, 145, 245, 246)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(9,2), c(138, 147)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(10,1), c(11)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(11,7), c(10, 13, 14, 180, 181, 182, 261)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(12,3), c(13, 156, 161)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(13,5), c(11, 12, 161, 184, 261)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(14,5), c(11,177, 178, 180, 182)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(15,2), c(68,72)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(16,4), c(148,149,150,154)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(17,5), c(150,152,160,169,171)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(18,3), c(185,186,189)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(19,3), c(48,103,233)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(20,3), c(48,202,203)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(21,3), c(201,203,204)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(22,5), c(23,24,25,50,195)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(23,3), c(22,24,25)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(24,4), c(22,23,195,196)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(25,5), c(22,23,50,102,105)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(26,1), c(80)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(27,2), c(80,81)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(28,3), c(50,102,193)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(29,5), c(59,60,159,160,171)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(30,2), c(52,121)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(31,2), c(92,98)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(32,3), c(89,91,295)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(33,4), c(128,129,132,134)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(34,4), c(38,39,112,216)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(35,7), c(36,39,50,107,116,192,193)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(36,2), c(35,192)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(37,4), c(38,56,215,296)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(38,5), c(34,37,39, 56,215)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(39,7), c(34,35,36,38,56,107,112)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(40,5), c(51,52,56,174,175)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(41,4), c(86,225,229,230)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(42,3), c(110,113,117)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(43,3), c(44,109,116)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(44,3), c(42,43,114)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(45,8), c(1,4,5,53,66,179,267,280)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(46,7), c(7,47,48,201,204,251,253)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(47,5), c(6,7,46,48,259)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(48,9), c(19,20,46,47,201,202,203,233,237)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(49,2), c(82,83)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(50,10), c(22,25,35,55,102,114,116,193,195,197)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(51,5), c(40,52,60,171,175)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(52,9), c(30,40,51,56,60,61,119,121,238)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(53,6), c(45,64,66,264,265,280)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(54,2), c(55,114)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(55,4), c(50,54,76,197)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(56,10), c(37,39,40,52,119,122,174,190,192,296)))
+
+# Non-metropolitan districts
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(57,1), c(61)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(58,5), c(59,60,61,165,243)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(59,5), c(29,58,60,159,165)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(60,7), c(29,51,52,58,59,61,171)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(61,5), c(52,57,60,100,243)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(62,4), c(64,65,66,67)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(63,1), c(67)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(64,3), c(53,62,66)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(65,2), c(62,67)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(66,6), c(45,53,62,64,67,179)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(67,6), c(62,65,66,140,176,179)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(68,7), c(15,69,71,72,74,75,183)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(69,7), c(68,70,74,183,184,187,262)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(70,2), c(69,74)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(71,6), c(68,73,75,199,204,263)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(72,5), c(15,68,75,185,189)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(73,9), c(46,71,204,248,251,252,260,263,277)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(74,6), c(68,69,70,71,262,263)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(75,6), c(15,71,72,153,199,200)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(76,6), c(55,77,78,81,197,244)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(77,2), c(76,81)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(78,6), c(76,79,81,82,83,244)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(79,2), c(78,244)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(80,4), c(26,27,81,83)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(81,6), c(27,76,77,78,80,83)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(82,4), c(49,78,79,83)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(83,5), c(49,78,80,81,82)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(84,1), c(88)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(85,1), c(87)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(86,3), c(41,88,230)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(87,4), c(85,88,124,131)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(88,6), c(86,87,130,135,217,230)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(89,5), c(32,91,92,93,98)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(90,7), c(61,93,94,97,100,206,243)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(91,4), c(89,93,95,295)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(92,3), c(31,89,98)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(93,7), c(89,90,91,95,97,98,100)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(94,4), c(90,97,99,206)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(95,10), c(91,93,96,100,118,240,289,295,305,310)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(96,2), c(95,240)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(97,3), c(90,93,94)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(98,4), c(31,89,92,93)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(99,2), c(94,206)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(100,6), c(61,90,93,95,121,240)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(101,2), c(102,106)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(102,8), c(28,50,101,105,193,194,223,236)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(103,3), c(19,106,233)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(104,2), c(105,106)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(105,3), c(25,104,106)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(106,7), c(101,102,103,104,105,233,236)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(107,6), c(35,39,108,112,116,117)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(108,5), c(107,112,113,117,218)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(109,4), c(43,110,116,117)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(110,3), c(109,111,117)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(111,1), c(110)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(112,4), c(34,107,108,115)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(113,4), c(42,108,117,227)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(114,6), c(43,44,50,54,55,116)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(115,4), c(112,211,216,218)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(116,5), c(43,107,109,114,117)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(117,7), c(42,107,108,109,110,113,116)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(118,4), c(95,239,240,289)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(119,4), c(52,56,122,238)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(120,6), c(122,123,238,239,282,294)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(121,6), c(52,61,238,239,240,241)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(122,5), c(56,119,123,294,296)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(123,3), c(120,122,238)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(124,6), c(87,125,129,131,132,135)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(125,5), c(124,127,131,132,133)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(126,3), c(128,130,283)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(127,3), c(125,131,133)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(128,4), c(33,126,130,134)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(129,4), c(33,124,134,135)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(130,8), c(88,126,128,134,135,217,283,285)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(131,4), c(87,124,125,127)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(132,4), c(33,124,125,129)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(133,2), c(125,127)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(134,5), c(33,128,129,130,135)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(135,6), c(87,88,124,129,130,134)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(136,5), c(139,141,143,144,276)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(137,5), c(8,145,146,245,254)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(138,3), c(9,142,147)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(139,4), c(8,136,143,144)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(140,4), c(67,143,147,176)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(141,5), c(136,143,176,275,276)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(142,4), c(138,143,145,147)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(143,4), c(140,141,142,147)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(144,6), c(8,136,139,146, 246,276)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(145,4), c(8,137,142,143)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(146,5), c(137,254,255,257,258)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(147,5), c(9,138,140,142,143)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(148,6), c(16,149,150,151,154,222)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(149,6), c(16,148,151,152,153,189)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(150,8), c(16,17,149,152,154,169,170,172)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(151,6), c(148,149,153,220,221,222)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(152,5), c(17,150,160,188,189)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(153,6), c(72,75,149,151,200,220)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(154,3), c(16,148,150)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(155,3), c(156,158,159)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(156,3), c(12,155,158)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(157,2), c(158,161)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(158,7), c(155,156,157,159,160,161,188)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(159,5), c(29,59,155,160,165)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(160,7), c(17,29,152,158,159,171,188)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(161,7), c(12,13,156,157,158,184,188)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(162,5), c(163,165,166,168,208)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(163,5), c(162,164,166,167,168)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(164,4), c(163,166,168,242)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(165,6), c(58,59,159,162,166,243)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(166,4), c(162,163,164,165)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(167,2), c(163,168)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(168,6), c(162,163,164,167,208,242)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(169,4), c(17,150,171,172)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(170,7), c(150,172,173,174,175,222,223)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(171,7), c(17,29,51,60,169,172,175)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(172,5), c(150,169,170,171,175)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(173,3), c(170,174,175)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(174,7), c(40,56,170,173,175,190,223)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(175,7), c(40,51,170,171,172,173,174)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(176,7), c(67,140,141,143,178,179,275)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(177,9), c(2,3,4,5,14,178,179,180,181)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(178,7), c(14,176,177,179,182,275,278)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(179,7), c(5,45,66,67,176,177,178)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(180,4), c(11,14,177,181)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(181,4), c(3,11,177,180)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(182,6), c(11,14,178,261,278,279)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(183,7), c(18,68,69,185,186,187,188)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(184,6), c(13,161,187,188,261,262)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(185,5), c(18,68,72,183,189)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(186,4), c(18,183,188,189)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(187,4), c(69,183,184,188)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(188,9), c(152,158,160,161,183,184,186,187,189)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(189,8), c(18,72,149,152,153,185,186,188)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(190,7), c(56,174,191,192,193,194,223)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(191,3), c(190,192,193)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(192,7), c(35,36,39,56,190,191,193)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(193,8), c(28,35,50,102,190,191,192,194)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(194,4), c(102,190,193,223)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(195,5), c(22,24,50,196,197)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(196,4), c(24,195,197,244)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(197,6), c(50,55,76,195,196,244)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(198,3), c(200,202,203)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(199,4), c(71,75,200,204)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(200,7), c(75,198,199,203,205,268,273)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(201,5), c(21,46,48,203,204)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(202,9), c(20,48,198,203,232,237,270,273,274)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(203,9), c(20,21,48,198,199,200,201,202,204)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(204,7), c(21,46,71,73,199,201,203)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(205,2), c(200,220)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(206,5), c(90,94,99,207,208)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(207,3), c(206,208,242)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(208,6), c(162,168,206,207,242,243)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(209,7), c(211,212,214,215,219,300,306)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(210,4), c(212,213,300,308)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(211,6), c(115,209,212,216,218,219)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(212,8), c(209,210,211,213,218,228,229,300)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(213,5), c(210,212,217,228,308)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(214,5), c(38,209,215,216,219)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(215,7), c(37,38,209,214,296,297,306)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(216,7), c(34,38,112,115,211,214,219)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(217,7), c(88,130,213,228,230,285,287)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(218,7), c(108,112,115,211,212,227,229)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(219,4), c(209,211,214,216)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(220,8), c(151,153,200,205,221,268,269,272)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(221,4), c(151,220,222,269)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(222,8), c(148,150,151,170,221,223,224,269)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(223,11), c(102,170,174,190,194,222,224,232,234,236,272)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(224,4), c(222,223,269,272)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(225,4), c(41,226,229,231)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(226,3), c(227,229,231)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(227,5), c(108,113,218,226,229)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(228,5), c(212,213,217,229,230)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(229,7), c(212,218,225,226,227,228,230)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(230,6), c(41,86,88,217,228,229)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(231,2), c(225,226)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(232,7), c(223,234,236,237,268,270,272)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(233,5), c(103,106,235,236,237)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(234,3), c(223,232,236)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(235,2), c(233,236)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(236,8), c(102,106,223,232,233,234,235,237)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(237,5), c(48,202,232,233,236)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(238,7), c(52,119,120,121,122,123,239)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(239,6), c(118,120,121,238,240,289)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(240,7), c(95,96,100,118,121,239,241)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(241,2), c(121,240)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(242,4), c(164,168,207,208)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(243,7), c(58,61,90,162,165,206,208)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(244,5), c(76,78,79,196,197)))
+
+# Metropolitan boroughs
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(245,5), c(8,137,246,250,254)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(246,6), c(8,144,245,247,249,250)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(247,6), c(46,246,250,251,251,253)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(248,6), c(73,247,249,252,276,277)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(249,5), c(144,246,247,248,276)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(250,6), c(7,245,246,247,253,254)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(251,4), c(46,73,247,252)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(252,4), c(73,247,248,251)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(253,4), c(7,46,247,250)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(254,6), c(7,137,146,245,250,257)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(255,5), c(6,146,256,257,258)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(256,3), c(6,255,258)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(257,5), c(6,7,146,254,255)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(258,3), c(146,255,256)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(259,1), c(47)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(260,5), c(73,261,262,263,277)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(261,7), c(11,13,182,184,260,262,279)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(262,6), c(69,74,184,260,261,263)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(263,5), c(71,73,74,260,262)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(264,2), c(53,280)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(265,3), c(53,264,266)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(266,3), c(265,267,280)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(267,3), c(45,266,280)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(268,7), c(200,220,232,270,271,272,273)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(269,5), c(220,221,222,224,272)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(270,5), c(202,232,268,271,274)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(271,4), c(268,270,273,274)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(272,6), c(220,223,224,232,268,269)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(273,6), c(198,200,202,268,271,274)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(274,4), c(202,270,271,273)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(275,4), c(176,276,277,278)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(276,7), c(136,141,144,248,249,275,277)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(277,7), c(73,248,260,275,276,278,279)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(278,5), c(178,182,275,277,279)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(279,5), c(182,260,261,277,278)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(280,5), c(45,53,264,266,267)))
+
+# London boroughs
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(281,3), c(295,304,305)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(282,6), c(120,284,286,289,293,294)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(283,3), c(130,285,290)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(284,7), c(282,286,288,292,294,299,312)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(285,8), c(130,217,283,287,290,301,302,307)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(286,6), c(282,284,291,293,298,312)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(287,6), c(213,217,285,301,303,308)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(288,5), c(284,292,294,296,297)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(289,7), c(95,118,120,239,282,293,310)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(290,3), c(283,285,302)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(291,8), c(286,293,298,304,307,309,310,312)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(292,5), c(284,288,299,306,311)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(293,6), c(282,286,289,291,298,310)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(294,6), c(120,122,282,284,288,296)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(295,5), c(32,91,95,281,305)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(296,7), c(37,56,122,215,288,294,297)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(297,5), c(215,288,292,296,306)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(298,3), c(286,291,293)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(299,4), c(284,292,311,312)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(300,6), c(209,210,212,303,306,308)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(301,5), c(285,303,307,311,312)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(302,3), c(285,290,307)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(303,5), c(287,300,301,308,311)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(304,5), c(281,291,305,309,310)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(305,5), c(95,281,295,304,310)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(306,6), c(209,215,292,297,300,311)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(307,5), c(285,291,301,302,309)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(308,5), c(210,213,287,300,303)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(309,3), c(291,304,307)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(310,6), c(95,289,291,293,304,305)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(311,7), c(292,299,300,301,303,306,312)))
+adjacent_pairs <- rbind(adjacent_pairs, cbind(rep(312,6), c(284,286,291,299,301,311)))
+```
+
+# Construct the neighbourhood matrix
+```{r create adjacency matrix}
+# Function to create an adjacency matrix
+# Input: Dataframe containing paired objects and number of objects
+# Output: Symmetric matrix with 1 denoting paired local authorities 
+adjacency_matrix <- function(pairs, n){
+  matrix <- matrix(0, nrow = n, ncol = n)
+  for(i in 1:nrow(pairs)){
+    matrix[pairs[i,1], pairs[i,2]] = 1
+    matrix[pairs[i,2], pairs[i,1]] = 1
+  }
+  return(matrix)
+}
+
+# Create a matrix with neighbouring local authorities paired
+# Store as a listW object for future use
+W <- adjacency_matrix(adjacent_pairs, K)
+list_W <- mat2listw(W, row.names = NULL, style="M")
+```
+
+
+

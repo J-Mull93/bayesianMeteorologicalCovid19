@@ -1,0 +1,305 @@
+---
+title: "Paper_EDA"
+author: "Jamie Mullienaux"
+date: "9/17/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r analyse weekday trends in case counts, echo=FALSE, message=FALSE, warning=FALSE}
+# Identify the weekday, weeks and average cases over time
+days <- c("Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat")
+daily_cases <- aggregate(covid$cases, by=list(covid$time), FUN=mean)
+weeks <- 1:9
+weekday_cases <- data.frame("Weekday" = rep(days, 9), 
+                            "Day"= 3:65,
+                            "Week" = rep(weeks, each = 7), 
+                            "Mean Cases" = daily_cases$x[-(1:3)])
+
+# Graphs of mean cases each day and by weekday each week
+# Not used in final report
+daily_case_plot <- ggplot(data = weekday_cases, aes(x=Day, y=Mean.Cases)) + 
+  geom_line() + 
+  geom_point() +
+  labs(x="Day", y="Mean Cases", title = "Average LA cases by day (Apr - May)")
+
+weekday_case_plot <- ggplot(data = weekday_cases, aes(x=Week, y=Mean.Cases, 
+                                                      col=Weekday)) + 
+  geom_line() + 
+  labs(x="Study week", y="Mean weekday cases across all LADs") +
+  theme(legend.position="top") + scale_x_discrete(limits=1:9) 
+# + scale_x_discrete(breaks = seq(1, 9, 1))
+
+
+daily_case_plot
+weekday_case_plot
+
+png("CasesByWeekday.png")
+grid.arrange(weekday_case_plot, top = "Average LA cases by weekday (Apr - May)")
+dev.off()
+```
+
+```{r assess distribution of cases, message=FALSE, warning=FALSE, echo=FALSE}
+set.seed(42)
+
+# Calculate mean and variance of observed cases for each day 
+mean_cases_daily <- rep(NA, N)
+var_cases_daily <- rep(NA, N)
+for(j in 0:(N-1)){
+  mean_cases_daily[j+1] <- mean(cases[covid$time == j])
+  var_cases_daily[j+1] <- var(cases[covid$time == j])
+}
+
+# Store mean and variance of daily cases in a dataframe
+daily_stats <- data.frame(Day = rep(1:N, 2), 
+                          Summary = rep(c("Mean", "Variance"), each = N),
+                          Value = c(mean_cases_daily, var_cases_daily))
+
+# plot mean and variance of daily cases
+daily_case_plot <- ggplot(data = daily_stats,
+                          mapping = aes(x = Day, y = Value)) + 
+  geom_line(aes(colour = Summary)) + 
+  ggtitle(label = "Daily mean and variance of cases") +
+  theme(axis.text.x = element_blank(), axis.ticks.x = element_blank(),
+        legend.position = c(.2, .9),
+        text = element_text(size = 8)) + 
+  labs(x = "Day", y = "")
+
+# Calculate mean and variance of observed cases for each local authority 
+mean_cases_LA <- rep(NA, K)
+var_cases_LA <- rep(NA, K)
+
+for(i in 1:K){
+  mean_cases_LA[i] <- mean(cases[covid$index == i])
+  var_cases_LA[i] <- var(cases[covid$index == i])
+}
+
+# Create a boxplot of cases mean:variance ratio by local authority 
+# Ratios >1 suggest the cases follow an over-dispersed Poisson model
+LA_case_plot <- ggplot(mapping = aes(x = 1:K, y = var_cases_LA/mean_cases_LA)) + 
+  geom_boxplot(outlier.shape = NA) +
+  geom_hline(yintercept = 1, linetype = 2, color = "red") +
+  ggtitle(label = "Local authority cases variance:mean ratio") +
+  ylim(0,5) +
+  theme(axis.text.x = element_blank(), axis.ticks.x = element_blank(),
+        text = element_text(size = 8)) + 
+  labs(x = "", y = "Ratio")
+
+# Show cases are effectively an over-dispersed Poisson
+# By comparing qq-plot with a theoretical O-D Poisson using negative binomial
+random_negbinom <- rnbinom(length(cases), 
+                           size=(mean(cases)/((var(cases)/mean(cases))-1)), 
+                           mu=mean(cases))
+
+cases_qq <- ggplot(mapping = aes(x = random_negbinom[order(random_negbinom)], 
+                                      y = cases[order(cases)])) + 
+  geom_point() + 
+  ggtitle(label = "QQ-plot: Cases vs Overdispersed Poisson") +
+  labs(x = "Overdispersed Poisson", y = "Cases")
+
+# Store plots as image files 
+png("Paper_CasePlots.png")
+grid.arrange(daily_case_plot, LA_case_plot, nrow = 1, ncol = 2)
+dev.off()
+
+png("Paper_CasesQQ.png")
+cases_qq
+dev.off()
+
+png("Paper_DailyCases.png")
+
+daily_mean <- ggplot(data = daily_stats[daily_stats$Summary == "Mean",],
+                          mapping = aes(x = Day, y = Value)) + 
+  geom_line() + 
+  ggtitle(label = "Mean of daily cases") +
+  theme(axis.text.x = element_blank(), axis.ticks.x = element_blank(),
+        text = element_text(size = 8), legend.position = "none") +
+  labs(x = "Day", y = "")
+
+daily_var <- ggplot(data = daily_stats[daily_stats$Summary == "Variance",],
+                          mapping = aes(x = Day, y = Value)) + 
+  geom_line() + 
+  ggtitle(label = "Variance of daily cases") +
+  theme(axis.text.x = element_blank(), axis.ticks.x = element_blank(),
+        text = element_text(size = 8), legend.position = "none") + 
+  labs(x = "Day", y = "")
+
+grid.arrange(daily_mean, daily_var, nrow = 1, ncol = 2)
+dev.off()
+```
+
+
+```{r investigate correlations between variables, message=FALSE, warning=FALSE, echo=FALSE}
+# Very strong relationship between SSRD and SSR(both definitions of solar radiation)
+ssrd_ssr <- ggplot(data = covid, mapping = aes(x = SSRD, y = SSR)) + 
+  geom_point() +
+  labs(x = "Surface Solar Radiation Downwrads", y = "Surface Solar Radiation") + 
+  ggtitle("Comparison of solar radiations")
+
+# Clear relationship between sea level and surface level pressure
+pressure_comparison <- ggplot(data = covid, 
+                              mapping = aes(x = MSL, y = surfpressure)) + 
+  geom_point() +
+  labs(x = "Mean Sea Level Pressure", y = "Surface Pressure") + 
+  ggtitle("Comparison of pressure")
+
+# The underlying relationship defines which local authority 
+pressure_correlations <- rep(NA, K)
+
+for(j in 1:K){
+  msl_j <- covid$MSL[covid$index == j]
+  sp_j <- covid$surfpressure[covid$index == j]
+  pressure_correlations[j] <- cor(msl_j, sp_j)
+}
+
+# Perfect relationship between two definitions of pressure given LA
+pressure_cor_boxplot <- ggplot(mapping = aes(x = 1:K, 
+                                             y = pressure_correlations)) + 
+  geom_boxplot() +
+  ggtitle(label="Local authority correlation between MSL & surface pressure") +
+  theme(axis.text.x = element_blank(), axis.ticks.x = element_blank()) + 
+  labs(x = "", y = "Correlation")
+
+
+# Linear relationship between absolute and relative humidity given temperature
+Temperature <- Tambient
+humidity_temp <- ggplot(data = covid,
+                        mapping = aes(x = RH, y = AH, color = Temperature)) + 
+  geom_point() +
+  labs(x = "Relative Humidity (%)", y = "Absolute Humidity") + 
+  ggtitle("Comparison of humidity & temperature")
+
+variables <- covid[,c(4:12)]
+cor(variables)
+
+png("Paper_HumidityTemp.png")
+humidity_temp
+dev.off()
+```
+
+
+```{r cross-correlation analysis between weather and cases, echo=FALSE}
+# Function to compute cross-correlation of a variable with an outcome 
+# Input: Variable, outcome, correlation metric, dataframe, grouping variable,
+# maximal number of lags and number of observations
+# Output: Average correlation acros grouping variable for each potential lag
+cross_correlations <- function(variable, outcome, cor_method, df, grp, n, max_lags){
+  m <- matrix(NA, nrow = n, ncol = max_lags)
+  for(i in 1:n){
+    x <- df[variable][df[grp] == i]
+    y <- df[outcome][df[grp] == i]
+    m[i,1] <- cor(x, y, method = "spearman")
+        if(i==1){
+    }
+    for(j in 2:max_lags){
+      m[i,j] <- cor(x[-((N+2-j):N)], y[-(1:(j-1))], method = cor_method)
+    }
+  }
+  return(colMeans(m))
+}
+
+# Compute cross-correlation for each variable with relative risk
+temp_cc <- cross_correlations("Tambient", "RR", "spearman", covid, "index", 
+                              K, 8)
+rh_cc <- cross_correlations("RH", "scr", "spearman", covid, "index", K, 8)
+sp_cc <- cross_correlations("surfpressure", "RR", "spearman", covid, "index", 
+                            K, 8)
+tp_cc <- cross_correlations("totprecip", "RR", "spearman", covid, "index", 
+                            K, 8)
+windV_cc <- cross_correlations("windV", "RR", "spearman", covid, "index", 
+                            K, 8)
+ssrd_cc <- cross_correlations("SSRD", "RR", "spearman", covid, "index", K, 8)
+
+# Store all cross-correlations in a single dataframe
+cases_cross_correlations <- data.frame("Temp" = temp_cc, "RH" = rh_cc, 
+                                       "Wind" = windV_cc, "SSRD" = ssrd_cc,
+                                       "Precipitation" = tp_cc,  
+                                       "SurfacePressure"=sp_cc, lags = 0:7)
+cases_cross_correlations <- reshape(cases_cross_correlations, direction="long", 
+                                    idvar="lags", 
+                                    varying = list(names(
+                                      cases_cross_correlations[1:6])))
+cases_cross_correlations <- rename(cases_cross_correlations, Variable = time, 
+                                   Correlation = Temp)
+cases_cross_correlations$Variable = rep(c("Temp", "RH", "Wind", "SSRD", 
+                                          "Precipitation", "SurfacePressure"),
+                                        each = 8)
+
+# Identify lags with maximal correlation magnitude
+maximal_correlation <- data.frame(Variable = c("Temp", "RH", "Wind", "SSRD", 
+                                          "Precipitation", "SurfacePressure"),
+                                  Correlation = c(0.090199205, 0.046185943, 
+                                                 -0.039888570, -0.097963677,
+                                                 0.021733378, -0.042352692), 
+                                  lags = c(6,6,1,6,6,5))
+
+# Plot cross-correlations by variables and lag
+correlation_plot <- ggplot(cases_cross_correlations, aes(x = lags,
+                                                         y = Correlation)) + 
+  geom_line(aes(colour = Variable)) +
+  ggtitle(label = "Cross-correlation of covariates to cases") +  
+  labs(x = "Lags", 
+       caption = "Figure 7: Correlation assessed using Spearman ranked method")
+
+```
+
+
+```{r variable summary statistics, eval=FALSE}
+# Summary statistics for each variable and the outcome
+c(summary(covid$Tambient)[c(1,3,4,6)],sd(covid$Tambient))
+c(summary(covid$RH)[c(1,3,4,6)],sd(covid$RH))
+c(summary(covid$AH)[c(1,3,4,6)],sd(covid$AH))
+c(summary(covid$windV)[c(1,3,4,6)],sd(covid$windV))
+c(summary(covid$SSRD)[c(1,3,4,6)],sd(covid$SSRD))
+c(summary(covid$SSR)[c(1,3,4,6)],sd(covid$SSR))
+c(summary(covid$totprecip)[c(1,3,4,6)],sd(covid$totprecip))
+c(summary(covid$surfpressure)[c(1,3,4,6)],sd(covid$surfpressure))
+c(summary(covid$MSL)[c(1,3,4,6)],sd(covid$MSL))
+c(summary(covid$cases)[c(1,3,4,6)],sd(covid$cases))
+```
+
+```{r RR graph, echo=FALSE}
+# Get avg RR over time by LA 
+avg_RR <- aggregate(model_data[,c("code", "RR")], 
+                               by = list(model_data[,"code"]), 
+                               FUN = mean)[,c(1,3)]
+names(avg_RR) <- c("code", "avg_RR")
+
+# Merge average RR with local authority codes to match to the graph
+avg_RR_LA <- merge(x = LA, y = avg_RR, by.x = "LAD20CD", by.y = "code", 
+                   all.x = FALSE)
+
+# Change data type so ggplot can be used
+gg_LA_avgRR = st_as_sf(avg_RR_LA)
+
+# Save plot
+png("Paper_MeanRRbyLA.png")
+rr_plot = ggplot() + geom_sf(data = gg_LA_avgRR, aes(fill = avg_RR)) + theme_void() + scale_fill_viridis(option = "C") + labs(fill='Relative risk') 
+
+grid.arrange(grobs = list(rr_plot), top = "Mean relative risk for each LAD across the study period", nrow = 1, ncol = 1)
+dev.off()
+```
+
+
+```{r prepare data to be modelled, echo=FALSE}
+# Restrict data as per lags
+# Ignores the first 6 days of cases, expected_cases and RR
+# Ignores the last 6 days of meteorological variables
+
+lags <- 6 # lag between weather and cases 
+adjust <- 5 # adjustment to ignore first 5 days as North Devon is missing
+
+covid <- covid[order(covid$date, covid$code), ]
+covid$time[covid$code == "E07000043"] <- covid$time[covid$code == "E07000043"] + 5 
+model_data <- covid[(covid$time < (N - lags)) & (covid$time > adjust - 1),]
+model_data$cases <- covid$cases[covid$time > (lags + adjust - 1)]
+model_data$expected_cases <- covid$expected_cases[covid$time > (lags + adjust - 1)]
+model_data$RR <- covid$RR[covid$time > (lags + adjust - 1)]
+
+# Define potential covariates for the model based on EDA
+possible_variables <- c("surfpressure", "Tambient", "RH", "totprecip", "SSRD", 
+                        "windV")
+```
