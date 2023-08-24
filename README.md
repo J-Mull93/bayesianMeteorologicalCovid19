@@ -1,5 +1,4 @@
-# bayes_study_of_covid19
-
+# README
 **Purpose of the project**
 
 This project contains files used in a study, from which the paper `A Bayesian spatio-temporal study of the association between meteorological factors and the spread of COVID-19' originated. This paper is currently available as a pre-print on arXiv.
