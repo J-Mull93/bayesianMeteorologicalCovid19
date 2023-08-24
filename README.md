@@ -1,6 +1,7 @@
 # bayes_study_of_covid19
 
 **Purpose of the project**
+
 This project contains files used in a study, from which the paper `A Bayesian spatio-temporal study of the association between meteorological factors and the spread of COVID-19' originated. This paper is currently available as a pre-print on arXiv.
 
 **Description of project files**
@@ -20,7 +21,8 @@ This project contains files used in a study, from which the paper `A Bayesian sp
   - Additionally LADs in the largest metropolitan areas that share a common adjacent LAD are neighbours
 
 **Have a question?**
+
 If you have any questions, or would like to discuss the project please contact Jamie Mullineaux via james.mullineaux.21@ucl.ac.uk
 
 **Terminology**
-LAD - Local Authority District
+- LAD - Local Authority District
