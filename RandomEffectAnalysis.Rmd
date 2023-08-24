@@ -76,7 +76,7 @@ islington_violin <- ggplot(data = islington_phi_long[1:400000,],
   stat_summary(fun="mean", geom="point", size=1, color="red")
 
 png("HackneyIislingtonRandomEffectsOrig.png")
-grid.arrange(grobs = list(hackney_violin, islington_violin), top = paste("Hackney and Islington random effect samples in M", "\u2080", sep = ""), nrow = 2)
+grid.arrange(grobs = list(hackney_violin, islington_violin), nrow = 2)
 dev.off()
 
 ```
@@ -111,6 +111,6 @@ islington_violin_v2 <- ggplot(data = islington_phi_long_v2[1:400000,],
   stat_summary(fun="mean", geom="point", size=1, color="red")
 
 png("HackneyIislingtonRandomEffects_v2.png")
-grid.arrange(grobs = list(hackney_violin_v2, islington_violin_v2), top = paste("Hackney and Islington random effect samples in M", "\u2081", sep = ""), nrow = 2)
+grid.arrange(grobs = list(hackney_violin_v2, islington_violin_v2), nrow = 2)
 dev.off()
 ```

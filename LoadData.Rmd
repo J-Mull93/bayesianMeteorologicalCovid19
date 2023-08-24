@@ -1,5 +1,5 @@
 ---
-title: "DataLoad_paper"
+title: "DataLoad"
 author: "Jamie Mullienaux"
 date: "9/13/2022"
 output: pdf_document
@@ -26,10 +26,10 @@ library(viridis)
 
 
 # Load daily cases data
-covid <- readRDS("clean_data_13Sept.rds")
+covid <- readRDS("CleanWeatherData.rds")
 
 # Load a separate file containing population & merge with case data
-pop_data <- read.csv("covid_cases.csv")
+pop_data <- read.csv("CasePopulationData.csv")
 populations <- unique(pop_data[c("code", "population")])
 covid <- merge(covid, populations)
 

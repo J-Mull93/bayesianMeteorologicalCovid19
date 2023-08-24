@@ -1,5 +1,5 @@
 ---
-title: "Paper_ParallelModels"
+title: "ParallelModels"
 author: "Jamie Mullienaux"
 date: "9/19/2022"
 output: pdf_document

@@ -1,5 +1,5 @@
 ---
-title: "Paper_ParallelAnalysis"
+title: "ParallelAnalysis"
 author: "Jamie Mullienaux"
 date: "9/23/2022"
 output: pdf_document
@@ -74,8 +74,7 @@ daily_resid <- ggplot(mapping = aes(x = mean_daily_resid$time,
 
 # Plot analysis of temporal residuals
 png("Parallel_TemporalResids.png")
-grid.arrange(grobs = list(daily_resid, weekday_resid), 
-             top = "Mean daily residuals across LADs with boxplot of all LAD resiudals by weekday", nrow = 2)
+grid.arrange(grobs = list(daily_resid, weekday_resid), nrow = 2)
 dev.off()
 ```
 
@@ -117,9 +116,9 @@ avg_resid_LA <- merge(x = LA, y = avg_resid, by.x = "LAD20CD", by.y = "code",
 gg_LA_avg_resid = st_as_sf(avg_resid_LA)
 
 # Save plot
-png("Paper_MeanResidbyLA.png")
+png("MeanResidbyLA.png")
 la_resid_plot = ggplot() + geom_sf(data = gg_LA_avg_resid, aes(fill = res)) + theme_void() + scale_fill_viridis(option = "C") + labs(fill='Residual') 
-grid.arrange(la_resid_plot, top = "Mean LAD residuals across the study period")
+grid.arrange(la_resid_plot)
 dev.off()
 ```
 
@@ -141,8 +140,8 @@ parallel_beta_other <- mcmc.list(adaptive_models[,1]$samples$beta[,-c(2:7)],
                                 adaptive_models[,3]$samples$beta[,-c(2:7)],
                                 adaptive_models[,4]$samples$beta[,-c(2:7)])
 
-# Assess convergence with gelman-rubin diagnostic and trace plots
-# Mostly looks good. Some chains may not have converegd for some weekdays
+# Assess convergence with Gelman-Rubin diagnostic and trace plots
+# Mostly looks good. Some chains may not have converged for some weekdays
 png("Parallel_DayTracePlots.png")
 plot(parallel_beta_days, density = FALSE)
 dev.off()
@@ -228,8 +227,8 @@ sat_posterior <- ggplot(parallel_beta_samples, aes(x = Sat)) +
   xlim(-0.45,0.45)
 
 # Plot weekday posterior distributions
-png(file = "Parallel_DayPosteriors_paper.png")
-grid.arrange(grobs = list(mon_posterior, tue_posterior, weds_posterior, fri_posterior, sat_posterior, sun_posterior), top = "Posterior distributions of weekday parameters with 95% credible intervals", ncol = 2, nrow = 3)
+png(file = "Parallel_DayPosteriors.png")
+grid.arrange(grobs = list(mon_posterior, tue_posterior, weds_posterior, fri_posterior, sat_posterior, sun_posterior), ncol = 2, nrow = 3)
 dev.off()
 
 # Density graphs for intercept and weather posterior distributions
@@ -289,10 +288,8 @@ precipitation_posterior <- ggplot(parallel_beta_samples, aes(x = Precipitation))
   xlim(-0.05,0.05)
 
 # Plot intercept and weather posterior distributions
-png(file = "Parallel_WeatherPosteriors_paper.png")
-grid.arrange(grobs = list(intercept_posterior, temp_posterior, rh_posterior, wind_posterior, ssrd_posterior, precipitation_posterior), 
-             top = "Posterior distributions for weather & intercept parameters with 95% credible intervals",
-             ncol = 2, nrow = 3)
+png(file = "Parallel_WeatherPosteriors.png")
+grid.arrange(grobs = list(intercept_posterior, temp_posterior, rh_posterior, wind_posterior, ssrd_posterior, precipitation_posterior), ncol = 2, nrow = 3)
 dev.off()
 ```
 
@@ -309,7 +306,7 @@ parallel_tau2 <- mcmc.list(adaptive_models[,1]$samples$tau2,
                           adaptive_models[,3]$samples$tau2,
                           adaptive_models[,4]$samples$tau2)
 
-# Assess convergence with Gelman diagnostic and trace plots - looks good
+# Assess convergence with Gelman-Rubin diagnostic and trace plots - looks good
 gelman.diag(parallel_rho)
 gelman.diag(parallel_tau2)
 
@@ -328,7 +325,7 @@ hyperparam_hdi <- HPDinterval(as.mcmc(rbind(parallel_rho[[1]],
                                       parallel_rho[[4]])), prob = 0.95)
 
 # Save graphical posterior densities of main hyperparameters to file
-png(file="ParallelHyperparams_paper.png")
+png(file="ParallelHyperparams.png")
 parallel_rhoS <- ggplot(mapping = aes(x = c(parallel_rho[[1]][,1],
                                             parallel_rho[[2]][,1],
                                             parallel_rho[[3]][,1],
@@ -358,9 +355,7 @@ parallel_tauw <- ggplot(mapping = aes(x = c(parallel_tau2[[1]][,2],
   labs(x = expression(tau[omega]^2), y = "Density")
 
 grid.arrange(grobs = list(parallel_rhoS, parallel_rhoT, parallel_tau,
-                          parallel_tauw),
-             top = "Posterior distributions of hyperparameters",
-             nrow=2, ncol=2)
+                          parallel_tauw), nrow=2, ncol=2)
 dev.off()
 ```
 
@@ -393,7 +388,7 @@ lq_ws <- sapply(parallel_w[,2:809], quantile, probs = 0.25)
 uq_ws <- sapply(parallel_w[,2:809], quantile, probs = 0.75)
 
 # Plot summary statistics of posterior samples for all 808 elements
-png(file="Parallel_NeighbourhoodMatrixPosteriors_paper.png")
+png(file="Parallel_NeighbourhoodMatrixPosteriors.png")
 
 w_mean_hist <- ggplot(mapping = aes(x = mean_ws)) +
   geom_histogram(position = "identity", bins = 25) +
@@ -426,7 +421,7 @@ w_gelmans <- gelman.diag(adaptive_ws)[[1]][1:808]
 # Histogram of neighbourhood matrix element Gelman-Rubin statistics
 # Shows convergence
 w_gelman_hist <- ggplot(aes(x = w_gelmans)) + geom_histogram() +
-  theme(legend.title = "Convergen diagnostics for neighbourhood matrix elements")
+  theme(legend.title = "Convergence diagnostics for neighbourhood matrix elements")
 ```
 
 ```{r identify neighbouring LADs of Hackney}
@@ -520,7 +515,7 @@ westminster <- ggplot(mapping = aes(x = parallel_w[,805])) +
   labs(x = "Correlation", y = "Density", title = "Westminster") + 
    theme(text=element_text(size=8))
 
-grid.arrange(grobs = list(camden, haringey, islington, newham, southwark, tower_hamlets, waltham_forest, westminster),  top = paste("Posterior correlations between Hackney and second neighbours in M", "\u2080", sep = ""), nrow=3, ncol=3)
+grid.arrange(grobs = list(camden, haringey, islington, newham, southwark, tower_hamlets, waltham_forest, westminster), nrow=3, ncol=3)
 
 dev.off()
 ```
@@ -569,7 +564,7 @@ westminster <- ggplot(mapping = aes(x = parallel_new_w[,938])) +
   labs(x = "Correlation", y = "Density", title = "Westminster") + 
    theme(text=element_text(size=8))
 
-grid.arrange(grobs = list(camden, haringey, islington, newham, southwark, tower_hamlets, waltham_forest, westminster), top = paste("Posterior correlations between Hackney and immediate neighbours in M", "\u2081", sep = ""), nrow=3, ncol=3)
+grid.arrange(grobs = list(camden, haringey, islington, newham, southwark, tower_hamlets, waltham_forest, westminster), nrow=3, ncol=3)
 
 dev.off()
 
@@ -627,8 +622,8 @@ wandsworth <- ggplot(mapping = aes(x = parallel_new_w[,920])) +
 
 
 grid.arrange(grobs = list(barking_and_dagenham, barnet, brent, bromley, enfield,
-             kensignton_and_chelsea, lambeth, lewisham, redbridge, wandsworth), 
-             top =  paste("Posterior correlations between Hackney and second neighbours in M", "\u2081", sep = ""), nrow=4, ncol=3)
+             kensignton_and_chelsea, lambeth, lewisham, redbridge, wandsworth),
+             nrow=4, ncol=3)
 
 dev.off()
 ```
